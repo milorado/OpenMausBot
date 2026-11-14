@@ -4,6 +4,8 @@ import { recordEvents } from "../testing/events.ts";
 import { compactBudget, contextWindowFor, shouldCompact } from "../context-budget.ts";
 import { CerebrasDriver } from "./cerebras.ts";
 
+vi.mock("./provider-fetch.ts");
+
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 const create = (config = {}) => CerebrasDriver.create({

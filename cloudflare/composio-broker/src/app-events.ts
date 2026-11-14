@@ -413,24 +413,24 @@ async function ackThrough(env: Env, installationId: string, after: number, now: 
   if (acked.meta.changes) await dayCount(env, utcDay(now), installationId, "delivered", acked.meta.changes).run();
 }
 
-/** Re-enables at Composio what the 14-day sweep disabled, on the installation's first polls back, up to one sweep
- *  run's worth per poll. A failure here is caught by the server's reconciliation, which sees `enabled` beside a
- *  disabled remote. */
+/** Re-enables swept bindings on the installation's first polls back, up to one sweep run's worth per poll. */
 async function resumeSweptTriggers(env: Env, installationId: string) {
-  await env.DB.prepare("UPDATE installations SET triggers_swept_at = NULL WHERE id = ?").bind(installationId).run();
   const { results } = await env.DB.prepare(
-    "SELECT composio_trigger_id, disabled_at FROM trigger_bindings WHERE installation_id = ? AND swept_at IS NOT NULL ORDER BY composio_trigger_id LIMIT ?",
-  ).bind(installationId, SWEEP_CALL_BUDGET).all<{ composio_trigger_id: string; disabled_at: number | null }>();
+    "SELECT composio_trigger_id, disabled_at, swept_at FROM trigger_bindings WHERE installation_id = ? AND swept_at IS NOT NULL ORDER BY composio_trigger_id LIMIT ?",
+  ).bind(installationId, SWEEP_CALL_BUDGET).all<{ composio_trigger_id: string; disabled_at: number | null; swept_at: number }>();
   for (const row of results) {
-    await env.DB.prepare("UPDATE trigger_bindings SET swept_at = NULL WHERE installation_id = ? AND composio_trigger_id = ?")
-      .bind(installationId, row.composio_trigger_id).run();
-    if (row.disabled_at !== null) continue;
-    const result = await setRemoteEnabled(env, row.composio_trigger_id, true);
-    if (result !== "done") console.warn(JSON.stringify({ message: "re-enabling a swept trigger failed", installationId, triggerId: row.composio_trigger_id }));
+    if (row.disabled_at === null) {
+      const result = await setRemoteEnabled(env, row.composio_trigger_id, true);
+      if (typeof result === "object") {
+        console.warn(JSON.stringify({ message: "re-enabling a swept trigger failed", installationId, triggerId: row.composio_trigger_id }));
+        continue;
+      }
+    }
+    await env.DB.prepare("UPDATE trigger_bindings SET swept_at = NULL WHERE installation_id = ? AND composio_trigger_id = ? AND swept_at = ?")
+      .bind(installationId, row.composio_trigger_id, row.swept_at).run();
   }
-  if (results.length === SWEEP_CALL_BUDGET) {
-    await env.DB.prepare("UPDATE installations SET triggers_swept_at = ? WHERE id = ?").bind(Date.now(), installationId).run();
-  }
+  await env.DB.prepare(`UPDATE installations SET triggers_swept_at = NULL WHERE id = ?1
+    AND NOT EXISTS (SELECT 1 FROM trigger_bindings WHERE installation_id = ?1 AND swept_at IS NOT NULL)`).bind(installationId).run();
 }
 
 /** GET /v1/events?after=<seq>&wait=<0-25>&limit=<1-50>, with header x-omb-poller. */
@@ -516,29 +516,48 @@ async function expireEvents(env: Env, now: number) {
   ]);
 }
 
-/** Disables at Composio the triggers of installations that have not polled for 14 days, so deliveries nobody reads
- *  stop costing events. Bindings keep the server's wish; its next poll re-enables them. Each run handles the next
- *  bindings not yet swept, so an installation with more of them than one run may disable is finished over several. */
+const LAST_LISTENER_ACTIVITY = "COALESCE(i.events_polled_at, (SELECT MAX(c.created_at) FROM trigger_bindings c WHERE c.installation_id = i.id))";
+const IDLE_BINDINGS = `FROM trigger_bindings b JOIN installations i ON i.id = b.installation_id
+  WHERE b.disabled_at IS NULL AND (b.swept_at IS NULL OR b.swept_at <= 0) AND ${LAST_LISTENER_ACTIVITY} < ?1`;
+
 async function sweepIdleInstallations(env: Env, now: number) {
+  const cutoff = now - SWEEP_AFTER_MS;
   const { results } = await env.DB.prepare(
-    `SELECT b.installation_id, b.composio_trigger_id,
-       (SELECT COUNT(*) FROM trigger_bindings o
-        WHERE o.composio_trigger_id = b.composio_trigger_id AND o.installation_id != b.installation_id AND o.disabled_at IS NULL) AS shared
-     FROM trigger_bindings b JOIN installations i ON i.id = b.installation_id
-     WHERE b.disabled_at IS NULL AND b.swept_at IS NULL
-       AND COALESCE(i.events_polled_at, (SELECT MAX(c.created_at) FROM trigger_bindings c WHERE c.installation_id = i.id)) < ?1
-     ORDER BY b.installation_id, b.composio_trigger_id LIMIT ?2`,
-  ).bind(now - SWEEP_AFTER_MS, SWEEP_CALL_BUDGET).all<{ installation_id: string; composio_trigger_id: string; shared: number }>();
-  for (const { installation_id: installationId, composio_trigger_id: triggerId, shared } of results) {
-    if (!shared && typeof await setRemoteEnabled(env, triggerId, false) === "object") {
-      console.warn(JSON.stringify({ message: "disabling an idle installation's trigger failed", installationId, triggerId }));
-      continue;
-    }
-    await env.DB.batch([
-      env.DB.prepare("UPDATE trigger_bindings SET swept_at = ?1 WHERE installation_id = ?2 AND composio_trigger_id = ?3")
-        .bind(now, installationId, triggerId),
-      env.DB.prepare("UPDATE installations SET triggers_swept_at = ?1 WHERE id = ?2").bind(now, installationId),
+    `SELECT b.composio_trigger_id ${IDLE_BINDINGS}
+     GROUP BY b.composio_trigger_id ORDER BY MAX(COALESCE(b.swept_at, 0)) DESC, b.composio_trigger_id LIMIT ?2`,
+  ).bind(cutoff, SWEEP_CALL_BUDGET).all<{ composio_trigger_id: string }>();
+  for (const { composio_trigger_id: triggerId } of results) {
+    const idleListeners = `SELECT b.installation_id ${IDLE_BINDINGS} AND b.composio_trigger_id = ?2`;
+    const activeListener = env.DB.prepare(
+      `SELECT 1 AS active FROM trigger_bindings b JOIN installations i ON i.id = b.installation_id
+       WHERE b.composio_trigger_id = ?2 AND i.disabled_at IS NULL AND b.disabled_at IS NULL AND ${LAST_LISTENER_ACTIVITY} >= ?1 LIMIT 1`,
+    ).bind(cutoff, triggerId);
+    const [, marked, active] = await env.DB.batch([
+      env.DB.prepare(`UPDATE installations SET triggers_swept_at = ?3 WHERE id IN (${idleListeners})`).bind(cutoff, triggerId, now),
+      env.DB.prepare(`UPDATE trigger_bindings SET swept_at = ?3 WHERE composio_trigger_id = ?2 AND installation_id IN (${idleListeners})`).bind(cutoff, triggerId, -now),
+      activeListener,
     ]);
+    if (!marked.meta.changes) continue;
+    if (!active.results.length) {
+      const disabled = await setRemoteEnabled(env, triggerId, false);
+      if (typeof disabled === "object") {
+        console.warn(JSON.stringify({ message: "disabling an idle trigger failed", triggerId }));
+        continue;
+      }
+      if (disabled === "done" && await activeListener.first()) {
+        // A poll or new binding may have resumed this instance while the disable was in flight.
+        const enabled = await setRemoteEnabled(env, triggerId, true);
+        if (typeof enabled === "object") {
+          console.warn(JSON.stringify({ message: "re-enabling an active trigger failed", triggerId }));
+          await env.DB.batch([
+            env.DB.prepare("UPDATE installations SET triggers_swept_at = ? WHERE id IN (SELECT installation_id FROM trigger_bindings WHERE composio_trigger_id = ? AND disabled_at IS NULL)").bind(now, triggerId),
+            env.DB.prepare("UPDATE trigger_bindings SET swept_at = ? WHERE composio_trigger_id = ? AND disabled_at IS NULL AND swept_at IS NULL").bind(-now, triggerId),
+          ]);
+          continue;
+        }
+      }
+    }
+    await env.DB.prepare("UPDATE trigger_bindings SET swept_at = ? WHERE composio_trigger_id = ? AND swept_at = ?").bind(now, triggerId, -now).run();
   }
 }
 

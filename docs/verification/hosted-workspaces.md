@@ -14,8 +14,8 @@ active `admin` entitlement. Partial or invalid hosted configuration denies
 remote access; it never enables legacy email or QR sign-in as a fallback.
 Unproxied loopback without a session is a *service*, not the owner, on a hosted
 workspace (see [shared-workspace trust](shared-workspace-trust.md)): it keeps
-health, the Slack worker's guarded routes and the bots' capability routes, and
-every admin change needs a session. For recovery an operator restarts with
+health, identity, edition, brand and the bots' capability routes. Workspace reads
+and actions need a scoped session. For recovery an operator restarts with
 `OMB_LOOPBACK_TRUST=owner`.
 The `identity.example.test` URLs below illustrate external identity-service
 endpoints; requests use the configured `OMB_ADMIN_URL`, not the tenant origin.

@@ -579,9 +579,7 @@ describe("loopback trust: owner on one person's machine, service on a shared wor
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  // Every call the deployed cloud Slack worker makes (openmaus-cloud server/slack-worker.ts, every released version): none may break.
-  const SERVICE_CALLS: Array<[string, string]> = [
-    ["GET", "/api/health"],
+  const WORKSPACE_CALLS: Array<[string, string]> = [
     ["GET", "/api/bots?messages=0"],
     ["GET", "/api/threads/thread-1/messages?limit=0"],
     ["GET", "/api/threads/thread-1/messages?limit=200&before=m-1"],
@@ -592,6 +590,11 @@ describe("loopback trust: owner on one person's machine, service on a shared wor
     ["POST", "/api/bots/bot-1/requests/job_0123456789abcdef/interrupt"],
     ["DELETE", "/api/bots/bot-1/queue/queue-1"],
     ["POST", "/api/threads/thread-1/respond"],
+  ];
+  const SERVICE_CALLS: Array<[string, string]> = [
+    ["GET", "/api/health"],
+    ["GET", "/api/brand"],
+    ["GET", "/api/edition"],
     ["GET", "/api/auth/session"],
     ["POST", "/api/internal/coordinate-bots"],
     ["GET", "/api/internal/agents"],
@@ -612,7 +615,7 @@ describe("loopback trust: owner on one person's machine, service on a shared wor
 
   it("keeps the owner exactly as before when no trust is given or trust is owner", () => {
     for (const trust of [undefined, "owner"] as const) {
-      for (const [method, path] of [...SERVICE_CALLS, ...ADMIN_CALLS]) {
+      for (const [method, path] of [...SERVICE_CALLS, ...WORKSPACE_CALLS, ...ADMIN_CALLS]) {
         expect(check(method, path, { trust }).auth, `${method} ${path}`).toEqual({ kind: "loopback", scopes: ["admin", "client"] });
       }
     }
@@ -622,7 +625,7 @@ describe("loopback trust: owner on one person's machine, service on a shared wor
     for (const [method, path] of SERVICE_CALLS) {
       expect(check(method, path, { trust: "service" }).auth, `${method} ${path}`).toEqual({ kind: "loopback", scopes: ["client"], trust: "service" });
     }
-    for (const [method, path] of ADMIN_CALLS) {
+    for (const [method, path] of [...WORKSPACE_CALLS, ...ADMIN_CALLS]) {
       const denied = check(method, path, { trust: "service" });
       expect(denied.auth, `${method} ${path}`).toBeNull();
       expect(denied.status).toBe(403);

@@ -3,6 +3,8 @@ import { OpenAICompatDriver, advertisedContextWindow } from "./openai-compat.ts"
 import { recordEvents } from "../testing/events.ts";
 import { compactBudget, contextWindowFor } from "../context-budget.ts";
 
+vi.mock("./provider-fetch.ts");
+
 const KEY = "fixture-key";
 const MODEL = "local-qwen";
 afterEach(() => { vi.unstubAllGlobals(); });

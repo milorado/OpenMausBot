@@ -570,22 +570,17 @@ loopback request **without a session** is trusted, and logs it:
 
 ```
 local requests: owner trust (self-hosted default)
-local requests: service trust (hosted workspace); without a session, loopback may use only health, the Slack worker's guarded routes and bot capability routes
+local requests: service trust (hosted workspace); without a session, loopback may use only health, identity and bot capability routes
 ```
 
 | Trust | Default for | A session-less loopback request may |
 |---|---|---|
 | `owner` | a self-hosted server, the desktop app | do everything, as today |
-| `service` | a hosted workspace: any of `OMB_ADMIN_URL`, `OMB_ADMIN_WORKSPACE` or `OMB_ADMIN_MEMBERSHIP` set (shared-workspace Full access only works there, so it is covered too) | read health, who-am-I, the bot list, a thread's messages and a bot's picture; open a thread; send through the guarded route; watch and stop its exact request; withdraw a queued line; **decline** a card; use the bots' own capability routes (`/api/internal/*`, which check their own per-turn token) |
+| `service` | a hosted workspace: any of `OMB_ADMIN_URL`, `OMB_ADMIN_WORKSPACE` or `OMB_ADMIN_MEMBERSHIP` set (shared-workspace Full access only works there, so it is covered too) | read health, session identity, edition and brand, or call internal bot routes that verify their own capability |
 
-Under `service`, everything else from loopback needs a real session and
-answers 403: settings and keys (`/api/config`), instances, MCP servers,
-webhooks, sessions and pairing, people and sign-in lists, usage, budgets,
-the decision log, fleet, workspace backups, creating or loosening bots, and
-approving or answering any card. The Slack worker (the only session-less
-local caller a hosted workspace has) needs nothing more and keeps working
-unchanged. Sessions — a portal sign-in, an email sign-in or a pairing — work
-exactly as before, with their own scopes.
+Workspace data and actions under `service` require a signed-in session. This
+includes listing bots, reading transcripts and attachments, opening tasks,
+sending guarded messages, interrupting a request and answering a card.
 
 Set `OMB_LOOPBACK_TRUST=service` on a self-hosted server people share (with
 an email sign-in list, say), or `OMB_LOOPBACK_TRUST=owner` to opt a hosted
@@ -609,20 +604,21 @@ With `service` on a self-hosted server:
 - A browser on an SSH tunnel gets the sign-in page instead of the app.
 - The MCP server script works with `OPENMAUSBOT_TOKEN` set to a paired session.
 
-**What `service` does not close yet.** Any bot's shell can still do
-everything the Slack worker does, and on a shared workspace that is a real
-gap: it can post into any bot's thread through the guarded route, including
-an existing Full-access thread (`expectedApprovalMode: "full"`), and while
-shared Full access is on it can open new Full-access threads. Either way the
-work runs with Full access and no card, so a user who can talk to a bot
-can get Full access through it. It can also stop a request and decline a
-card. It cannot approve a card, change settings, keys, people or sessions,
-or loosen a bot's permissions. The planned fix is a relay token that only
-the Slack worker holds, so these routes stop answering session-less loopback
-at all; until then, turn shared Full access on only where every user may
-have Full access. Files the server's user owns (`config.json`, the engine's
-environment) are also still readable from a bot's shell; that needs a
-second user for engines, a separate change.
+**Migrating a local relay.** Older Slack workers that relied on a shared
+loopback address receive 403 for workspace reads and actions after this
+upgrade. Upgrade or pause that worker before rolling out the server. For
+person-facing actions, authenticate as the person using the workspace's
+existing sign-in flow and a route their session can use. A client session
+can read its visible bots and send a message in its own scope. Guarded sends
+with `onBehalfOf` require admin scope. Hold any required admin session only
+in a trusted relay isolated from agent processes, bind the actor to verified
+upstream identity, and apply the person's bot and thread permissions before
+relay. Where the deployment cannot isolate a relay credential, keep the
+integration disabled. A session cannot create a new Full task through the
+operator-only loopback grant. Keep relayed tasks in Ask mode.
+
+File access follows operating-system permissions. Use separate users or
+containers when workers hold credentials that agent shells must not read.
 
 ## Sign in with your email
 
@@ -693,7 +689,7 @@ and only when the card can be traced to a person:
   routine or webhook, from Slack (until Slack passes the asker through), or
   in a thread from before this existed — may be answered by any user, as
   before;
-- a session-less local caller under `service` trust may only decline.
+- answering or declining a card under `service` trust requires a session.
 
 On a workspace with one person, anyone who can chat may answer, as before.
 Each answered card records who answered it (`card.answeredBy`), and so does
@@ -752,9 +748,7 @@ alone.
   share "everyone", so nothing changes until an admin restricts one. A bot a
   Chief creates (directly, or in a reviewed team setup) gets exactly the
   Chief's audience, and a copy of the Chief's connected apps.
-- **Who sees everything.** Admin sessions, the owner on this machine, and a
-  session-less local service (the Slack worker under `service` trust) see
-  every bot. A pairing-code device with no email sees only bots everyone
+- **Who sees everything.** Admin sessions and the owner on this machine see every bot. A pairing-code device with no email sees only bots everyone
   can see. Users never receive a bot's audience list.
 - **Files.** An attachment is refused only when everything that uses it —
   a message in a thread, a bot's picture — is hidden from that user. A
@@ -1255,6 +1249,16 @@ It stops a member's turn that shows no progress for that long. While one of the
 turn's tools runs, the turn may show nothing for up to 60 minutes (the longest
 an MCP call can be set to take) or the room's limit if that is longer. These two
 settings do not change it.
+
+## Recovering a bot or group registry
+
+If startup reports that it cannot load `bots.json` or `groups.json`, stop
+the server and copy the data directory before attempting repairs. The named
+file must contain a JSON array of records with their original IDs. Restore
+a known-good workspace snapshot, or repair a copy of the registry and put it
+back in place before restarting. Bot IDs and thread IDs connect the registry
+to existing workspace folders and transcripts. An empty replacement discards
+those mappings.
 
 ## Updating
 

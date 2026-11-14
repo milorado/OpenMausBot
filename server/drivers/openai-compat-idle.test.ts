@@ -72,6 +72,27 @@ async function localServer(handle: (req: import("node:http").IncomingMessage, re
   };
 }
 
+it.each([60_000, 360_000])("survives a malformed response with a %i ms provider timeout", async timeout => {
+  vi.stubEnv("OPENMAUS_OPENAI_COMPAT_IDLE_TIMEOUT_MS", String(timeout));
+  let calls = 0;
+  const fixture = await localServer((req, res) => {
+    if (req.url === "/v1/models") { res.end(JSON.stringify({ data: [] })); return; }
+    if (++calls === 1) {
+      res.writeHead(200, { "content-encoding": Array(6).fill("gzip").join(","), "content-length": "100" });
+      res.flushHeaders();
+      setTimeout(() => res.socket?.destroy(), 20);
+    } else {
+      res.end(JSON.stringify({ choices: [{ message: { content: "recovered" }, finish_reason: "stop" }] }));
+    }
+  });
+  try {
+    await expect(fixture.inst.generateText!("first")).rejects.toThrow();
+    await expect(fixture.inst.generateText!("second")).resolves.toBe("recovered");
+  } finally {
+    await fixture.close();
+  }
+});
+
 it("stops waiting soon after a local server stops answering, long before the reply wait", async () => {
   vi.stubEnv("OPENMAUS_OPENAI_COMPAT_IDLE_TIMEOUT_MS", "60000");
   vi.stubEnv("OPENMAUS_OPENAI_COMPAT_PROBE_MS", "200");

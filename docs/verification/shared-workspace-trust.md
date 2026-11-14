@@ -15,13 +15,9 @@ description is in [self-hosting](../self-hosting.md#loopback-trust-owner-or-serv
   `service`); the desktop app always keeps `owner` behind its per-launch
   capability. Under `service` a session-less loopback request may use only
   `SERVICE_ALLOW` (`server/request-auth.ts`): health, who-am-I, edition,
-  brand, the bot list, thread messages, attachments, new threads, the guarded
-  send, the exact request fence and its stop, withdrawing a queued line,
-  `POST /api/threads/:id/respond` (decline only), and the bots' capability
-  routes under `/api/internal/*`. Everything else answers 403. That is
-  exactly the set the cloud Slack worker calls (checked against the cloud
-  repository's worker source, every released version), so the deployed
-  worker needs no change.
+  brand and the bots' capability routes under `/api/internal/*`. The testing
+  capability route also requires its private test key. Local relays need a
+  scoped session to access workspace data and actions.
 - **The CLI under service trust.** `openmausbot serve` hands the server it
   starts a per-launch secret over the server's stdin; that secret opens
   `/api/auth/pairing` for that CLI alone, so `serve` still prints the first
@@ -35,7 +31,7 @@ description is in [self-hosting](../self-hosting.md#loopback-trust-owner-or-serv
   bot opened while working on someone's request, that person — may be
   answered only by them, an admin or the owner. A card that names nobody
   (owner-sent, routine, webhook, Slack, pre-upgrade) may be answered by any
-  member, as before. A `service` caller may only decline. This applies to
+  member, as before. A caller under service trust must sign in to answer or decline. This applies to
   both respond routes and to "always allow". It adds no card, prompt or
   gate: the provider CLI's own approval is the card. Who a thread was opened
   for lives in `<data>/thread-starters.json` (server-private, never on the
@@ -73,10 +69,8 @@ pnpm exec vitest run server/request-auth.test.ts server/decision-log.test.ts \
   secret opening the pairing route and nothing else, and the start-up choice.
 - `server/hosted-access.test.ts` ("treats a session-less local caller as a
   service by default") boots a portal-membership workspace with shared Full
-  access and no override: the start-up log line, the worker's whole path over
-  loopback (health, bot list, a Full-access thread, a guarded send, its
-  request fence), 403 for `PUT /api/config`, `POST /api/webhooks`, session
-  list and revocation, bot creation and loosening, and an unguarded send,
+  access and no override: the start-up log line, 403 for workspace reads, Full task creation, guarded sends,
+  request lookups, configuration changes, bot creation and an unguarded send,
   with nothing changed afterwards; then an admin portal session saves the
   retention window and reads `membership`. The other cases in that file keep
   `OMB_LOOPBACK_TRUST=owner` because they set fixtures up over loopback.
@@ -88,9 +82,8 @@ pnpm exec vitest run server/request-auth.test.ts server/decision-log.test.ts \
   `/api/internal/threads` handoff) leads back to that member, a card that
   names nobody is answered by any member, an admin and the owner answer
   anyone's card, and under `OMB_LOOPBACK_TRUST=service` a session-less caller
-  cannot approve (or use the bot-scoped route or always-allow) but can
-  decline, while a Slack-shaped guarded request stays answerable by any
-  member. Each answer's decision row and card name who answered.
+  cannot approve or decline. The signed-in requester can still decline, and
+  the decision row records their identity.
 - `server/cli-service-trust.e2e.test.ts` runs the real `openmausbot serve`
   with `OMB_LOOPBACK_TRUST=service`: it prints a pairing code and keeps
   running, the pairing route refuses every other local caller, and later
@@ -102,11 +95,9 @@ pnpm exec vitest run server/request-auth.test.ts server/decision-log.test.ts \
   from its source and exercised route by route above.
 - "Always allow" by a refused member is covered by code, not by the fake
   engine, whose cards carry no allow key.
-- Not closed: a bot's shell under `service` trust can still use the guarded
-  route to post into an existing Full-access thread, or open one while shared
-  Full access is on, so a member can get Full-access work done without a
-  card. It can also stop a request and decline a card, and read files its
-  user owns. A worker-only relay token is the planned fix.
+- Deployment isolation is an operator prerequisite. Agent shells with the
+  worker's operating-system permissions may still be able to read its
+  credential storage.
 - The Settings screens and the sign-in redirect were checked by rendering and
   unit tests, not in Electron or a browser.
 

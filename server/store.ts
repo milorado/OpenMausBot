@@ -1,7 +1,8 @@
-import { chmodSync, existsSync, readFileSync, mkdirSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import { writeFileAtomic, writeFileAtomicIfChanged } from "./atomic.ts";
+import { readRegistry } from "./registry-read.ts";
 import { commitRegistryChange, keptRevocation, saveRegistryFor } from "./registry-save.ts";
 import { parseToolScope, toolScopeWidens } from "../shared/tool-scope.ts"; import { grantScopedApps } from "../shared/connector-scopes.ts";
 import { reorderStable } from "../shared/bot-order.ts";
@@ -203,6 +204,7 @@ function tightenRegistryFile(file: string): void {
   } catch {
   }
 }
+
 const messagesFile = (threadId: string) => join(DATA_DIR, `messages-${threadId}.json`);
 
 export const sectionKey = (section?: string | null): string => section?.trim() || "";
@@ -330,19 +332,9 @@ export class Store {
     this.personName = personName;
     mkdirSync(DATA_DIR, { recursive: true });
     for (const file of [BOTS_FILE, GROUPS_FILE]) tightenRegistryFile(file);
-    // An unreadable bots.json must never read as "every member was deleted".
-    let botsLoaded = false;
-    try {
-      this.bots = JSON.parse(readFileSync(BOTS_FILE, "utf8"));
-      botsLoaded = Array.isArray(this.bots);
-    } catch {
-      this.bots = [];
-    }
-    try {
-      this.groups = JSON.parse(readFileSync(GROUPS_FILE, "utf8"));
-    } catch {
-      this.groups = [];
-    }
+    const bots = readRegistry<BotRecord>(BOTS_FILE);
+    this.bots = bots ?? [];
+    this.groups = readRegistry<GroupRecord>(GROUPS_FILE) ?? [];
     this.rememberSections([...this.bots, ...this.groups].map((record) => record.section));
     let botsMigrated = false;
     const browserProfileAliases = loadBrowserProfileIdAliases();
@@ -487,7 +479,7 @@ export class Store {
     for (const g of this.groups) {
       g.busyBotId = null;
       delete g.turnStartedAt;
-      if (botsLoaded && !g.dm && g.memberIds.some((id) => !botIds.has(id))) {
+      if (bots && !g.dm && g.memberIds.some((id) => !botIds.has(id))) {
         g.memberIds = g.memberIds.filter((id) => botIds.has(id));
         groupsMigrated = true;
       }
@@ -528,8 +520,8 @@ export class Store {
       g.pinnedMessageId = active.pinnedMessageId;
     }
     if (groupsMigrated) this.saveGroups();
-    const clearModelCopies = !existsSync(THREAD_MODEL_COPIES_CLEARED) && (botsLoaded || !existsSync(BOTS_FILE));
-    const fillAskedAts = !existsSync(ASKED_AT_FILLED) && (botsLoaded || !existsSync(BOTS_FILE));
+    const clearModelCopies = !existsSync(THREAD_MODEL_COPIES_CLEARED);
+    const fillAskedAts = !existsSync(ASKED_AT_FILLED);
     for (const b of this.bots) {
       if (b.projects?.some((project) => "modelSelection" in project)) {
         b.projects = b.projects.map(({ id, name, emoji }) => ({ id, name, ...(isProjectEmoji(emoji) ? { emoji } : {}) }));

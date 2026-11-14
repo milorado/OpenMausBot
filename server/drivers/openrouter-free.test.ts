@@ -10,6 +10,8 @@ import {
 } from "./openrouter-free.ts";
 import { classifyError } from "./retry.ts";
 
+vi.mock("./provider-fetch.ts");
+
 type Row = OpenRouterModelRow & { id: string; name: string };
 /** A trimmed copy of the public https://openrouter.ai/api/v1/models (Oct 19 2026). */
 const CATALOG: Row[] = JSON.parse(readFileSync(new URL("../fixtures/openrouter-models.json", import.meta.url), "utf8")).data;

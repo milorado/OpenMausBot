@@ -29,27 +29,12 @@ export interface RequestAuthResult {
 const LOOPBACK_SCOPES: readonly Scope[] = ["admin", "client"];
 const SERVICE_SCOPES: readonly Scope[] = ["client"];
 
-/** What a `service`-trust loopback caller may reach: health and identity, the cloud Slack worker's routes (it
- * shares the workspace's network namespace), and the turn-scoped capability routes, whose bearer the handler checks.
- *
- * Open risk: a bot's shell is a loopback caller too, so it can do everything the Slack worker does: post into any
- * bot's thread through the guarded route, including an existing Full-access thread, open new Full-access threads
- * while the operator's shared Full access is on, stop a request and decline a card. Planned fix: a relay token only
- * the Slack worker holds, so these routes stop answering session-less loopback. */
+/** Agent shells share the worker's loopback interface. Workspace data and actions require a signed-in session. */
 export const SERVICE_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: RegExp }> = [
   { methods: ["GET"], path: /^\/api\/health$/ },
   { methods: ["GET"], path: /^\/api\/auth\/session$/ },
   { methods: ["GET"], path: /^\/api\/edition$/ },
   { methods: ["GET"], path: /^\/api\/brand$/ },
-  { methods: ["GET"], path: /^\/api\/bots$/ },
-  { methods: ["GET"], path: /^\/api\/threads\/[\w-]+\/messages$/ },
-  { methods: ["GET"], path: /^\/api\/attachments\/[\w.-]+$/ },
-  { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/tasks$/ },
-  { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/messages\/guarded$/ },
-  { methods: ["GET"], path: /^\/api\/bots\/[\w-]+\/requests\/[\w-]+$/ },
-  { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/requests\/[\w-]+\/interrupt$/ },
-  { methods: ["DELETE"], path: /^\/api\/bots\/[\w-]+\/queue\/[\w-]+$/ },
-  { methods: ["POST"], path: /^\/api\/threads\/[\w-]+\/respond$/ }, // decline only: see the handler
   { methods: ["GET", "POST", "PUT", "PATCH", "DELETE"], path: /^\/api\/internal\// }, // capability bearer checked in the handler
   { methods: ["POST"], path: /^\/api\/testing\/internal-capability$/ }, // exists only with its private key
 ];
@@ -615,7 +600,7 @@ export function resolveRequestAuth(req: IncomingMessage, options: ResolveOptions
       }
       // On a shared server "local" includes every bot's shell: default deny outside SERVICE_ALLOW.
       if (!serviceAllowed(method, path)) {
-        return deny(403, "forbidden: on this shared server a local request without a session may only use the service routes; sign in to change settings, people or access");
+        return deny(403, "forbidden: on this shared server, sign in to read workspace data or take actions");
       }
       return { auth: { kind: "loopback", scopes: SERVICE_SCOPES, trust: "service" }, status: 401, error: "" };
     }

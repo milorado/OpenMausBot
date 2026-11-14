@@ -4,6 +4,8 @@ import { buildTurnContext, replaysNatively } from "../turn-context.ts";
 import { instanceConfigs } from "../config.ts";
 import { OpenAICompatDriver } from "./openai-compat.ts";
 
+vi.mock("./provider-fetch.ts");
+
 describe("OpenAICompatDriver", () => {
   const savedUrl = process.env.OPENAI_COMPAT_URL;
   const savedKey = process.env.OPENAI_COMPAT_API_KEY;

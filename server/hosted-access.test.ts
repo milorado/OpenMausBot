@@ -351,7 +351,7 @@ describe("hosted bridge in the full server", () => {
     expect((await call(path, { local: true })).body).toEqual({ available: false });
     policyEvidence.push({ slackManagement: management.body, memberStatus: asMember.status, localMembershipAvailable: false });
   }, 30_000);
-  it("treats a session-less local caller as a service by default: the Slack worker's calls work, admin changes need a session", async () => {
+  it("treats a session-less local caller as a service by default: workspace reads and relay actions need a session", async () => {
     state();
     await restart({ OMB_ADMIN_MEMBERSHIP: "portal", OMB_SHARED_WORKSPACE_FULL_ACCESS: "1", OMB_LOOPBACK_TRUST: undefined });
     expect(log).toContain("local requests: service trust (hosted workspace)");
@@ -369,21 +369,16 @@ describe("hosted bridge in the full server", () => {
     expect((await call("/api/auth/session", { local: true })).body).toMatchObject({ kind: "loopback", scopes: ["client"], trust: "service" });
     const health = await call("/api/health", { local: true });
     expect(health.status).toBe(200);
-    expect(health.body.capabilities).toMatchObject({ guardedMessages: 1, guardedRequests: 1, sharedWorkspaceFullAccess: 1 });
-    expect((await call("/api/bots?messages=0", { local: true })).status).toBe(200);
-    const task = await call(`/api/bots/${botId}/tasks`, { method: "POST", local: true, body: { title: "Slack · C1 · 1.0", approvalMode: "full" } });
-    expect(task.status, JSON.stringify(task.body)).toBe(201);
-    const threadId = task.body.task.threadId as string;
-    const page = await call(`/api/threads/${threadId}/messages?limit=0`, { local: true });
-    expect(page.status).toBe(200);
+    expect(health.body.capabilities).toMatchObject({ guardedMessages: 1, guardedRequests: 1 });
+    expect(health.body.capabilities.sharedWorkspaceFullAccess).toBeUndefined();
+    const threadId = created.body.bot.threadId as string;
     const sendId = "slackjob_0123456789abcdef";
-    const sent = await call(`/api/bots/${botId}/messages/guarded`, { method: "POST", local: true, body: {
-      threadId, text: "hello from Slack", sendId, expectedActiveLeafId: page.body.activeLeafId ?? null, expectedApprovalMode: "full",
-    } });
-    expect(sent.status, JSON.stringify(sent.body)).toBe(202);
-    expect((await call(`/api/bots/${botId}/requests/${sendId}?threadId=${threadId}`, { local: true })).status).toBe(200);
-
     const refused: Array<[string, string, unknown?]> = [
+      ["GET", "/api/bots?messages=0"],
+      ["GET", `/api/threads/${threadId}/messages?limit=0`],
+      ["POST", `/api/bots/${botId}/tasks`, { title: "From worker", approvalMode: "full" }],
+      ["POST", `/api/bots/${botId}/messages/guarded`, { threadId, text: "hello", sendId, expectedActiveLeafId: null, expectedApprovalMode: "full" }],
+      ["GET", `/api/bots/${botId}/requests/${sendId}?threadId=${threadId}`],
       ["PUT", "/api/config", { budgets: { monthlyUsd: 0 } }],
       ["POST", "/api/webhooks", { name: "Backdoor", prompt: "hi", botId }],
       ["GET", "/api/auth/sessions"],
@@ -399,7 +394,7 @@ describe("hosted bridge in the full server", () => {
       expect(response.body.error).toMatch(/shared server/);
     }
     expect((await call("/api/auth/session", { cookie: admin })).status).toBe(200);
-    const bots = (await call("/api/bots?messages=0", { local: true })).body.bots;
+    const bots = (await call("/api/bots?messages=0", { cookie: admin })).body.bots;
     expect(bots.some((bot: any) => bot.name === "Rogue")).toBe(false);
     expect(bots.find((bot: any) => bot.id === botId).approvalMode).not.toBe("auto");
 

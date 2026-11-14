@@ -26,7 +26,7 @@ import { requestTooLargeMessage } from "../../shared/request-too-large.ts";
 import { toolSchemaProfileFor } from "../tool-schema-profile.ts";
 import { classifyContinuable, writeTurnHandoff } from "../turn-continuation.ts";
 import { KEY_REJECTED_REASON, keyRejected, noteKeyAccepted, noteKeyRejected, rejectsKey } from "../key-rejections.ts";
-import { Agent, fetch as fetchWithoutLimits } from "undici";
+import { providerFetch } from "./provider-fetch.ts";
 
 export interface OpenAIChatMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -104,12 +104,6 @@ interface NativeLog {
 // or body bytes, whatever its signal allows. A local model sends nothing until its first token.
 const FETCH_LIMIT_MS = 300_000;
 const LIVENESS_MISSES = 3;
-let unlimitedAgent: Agent | undefined;
-function fetchPastLimit(url: string, init: RequestInit): Promise<Response> {
-  unlimitedAgent ??= new Agent({ headersTimeout: 0, bodyTimeout: 0 });
-  return fetchWithoutLimits(url, { ...init, dispatcher: unlimitedAgent } as Parameters<typeof fetchWithoutLimits>[1]) as unknown as Promise<Response>;
-}
-
 interface RuntimeOptions<Config> {
   input: DriverCreateInput<Config>;
   driverKind: string;
@@ -323,7 +317,7 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
   const watchServer = (everyMs: number, stop: (reason: Error) => void) => {
     let misses = 0;
     const timer = setInterval(() => {
-      fetch(`${options.apiUrl}/models`, { headers: { authorization: `Bearer ${options.apiKey}` }, signal: AbortSignal.timeout(everyMs) })
+      providerFetch(`${options.apiUrl}/models`, { headers: { authorization: `Bearer ${options.apiKey}` }, signal: AbortSignal.timeout(everyMs) })
         .then((response) => { misses = 0; void response.body?.cancel(); })
         .catch(() => {
           if (++misses === LIVENESS_MISSES) stop(new Error(`The model server at ${new URL(options.apiUrl).host} stopped answering, so the reply was stopped.`));
@@ -363,14 +357,13 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
         ...options.requestBody(model, messages, stream),
         ...(tools.length ? { tools } : {}),
       });
-      const send = options.timeoutMs > FETCH_LIMIT_MS ? fetchPastLimit : fetch;
-      const response = await send(`${options.apiUrl}/chat/completions`, {
+      const response = await providerFetch(`${options.apiUrl}/chat/completions`, {
         method: "POST",
         ...(messages.some(message => Array.isArray(message.content) && message.content.some(part => part.type === "image_url")) ? { redirect: "error" as const } : {}),
         headers: { authorization: `Bearer ${options.apiKey}`, "content-type": "application/json" },
         body: payload,
         signal: activeSignal,
-      });
+      }, options.timeoutMs > FETCH_LIMIT_MS);
       if (!response.ok) {
         const body = await response.text().catch(() => "");
         if (rejectsKey(response.status, body)) noteKeyRejected(options.apiUrl, options.apiKey);
