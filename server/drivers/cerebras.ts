@@ -1,3 +1,4 @@
+import { providerFetch } from "./provider-fetch.ts";
 import { z } from "zod";
 import type { ModelCatalog, ProviderDriver } from "../contracts.ts";
 import { createOpenAIChatRuntime } from "./openai-chat.ts";
@@ -61,7 +62,7 @@ export const CerebrasDriver: ProviderDriver<CerebrasConfig> = {
     const refreshModels = async () => {
       if (!apiKey) return;
       try {
-        const response = await fetch(`${config.url}/models`, {
+        const response = await providerFetch(`${config.url}/models`, {
           headers: { authorization: `Bearer ${apiKey}` },
           redirect: "error",
           signal: AbortSignal.timeout(8_000),

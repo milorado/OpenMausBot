@@ -69,6 +69,34 @@ describe("the connector's connection to MausBot", () => {
     expect(handled.map((job) => job.id)).toEqual(["job-1"]);
   });
 
+  it("keeps a running backup across reply-cache eviction and reconnect", async () => {
+    let backups = 0;
+    let finish = () => {};
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const { admin } = await connected({ handle: async (job) => {
+      if (job.type === "backup") {
+        backups += 1;
+        await pending;
+      }
+      return { id: job.id, ok: true, result: { backup: { id: "copy", kind: "backup", createdAt: 1, image: null } } };
+    } });
+    const backup = { id: "long-backup", type: "backup", args: {} };
+    admin.send(backup);
+    try {
+      await Promise.all(Array.from({ length: 201 }, (_, i) => admin.job("status", {}, `status-${i}`)));
+      admin.drop();
+      await until(() => admin.connections.length === 2);
+      admin.send(backup);
+      await admin.job("status", {}, "after-retry");
+      expect(backups).toBe(1);
+    } finally {
+      finish();
+    }
+    const reply = await admin.replyTo(backup.id);
+    expect(await admin.job("backup", {}, backup.id)).toEqual(reply);
+    expect(backups).toBe(1);
+  });
+
   it("refuses a malformed job by its id, and ignores what has no id or is not JSON", async () => {
     const { admin, handled, lines } = await connected();
     expect(await admin.job("shell" as "status", { command: "id" }, "job-2")).toEqual({ id: "job-2", ok: false, error: { code: "unknown_job", message: 'unknown job type "shell"' } });

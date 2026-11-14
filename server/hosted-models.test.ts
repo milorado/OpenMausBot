@@ -10,6 +10,8 @@ import { OpenAICompatDriver } from "./drivers/openai-compat.ts";
 import { recordEvents } from "./testing/events.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 
+vi.mock("./drivers/provider-fetch.ts");
+
 const directories: string[] = [], registries: ProviderRegistry[] = [];
 afterEach(async () => {
   await Promise.all(registries.splice(0).map(registry => registry.disposeAll()));

@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { recordEvents } from "../testing/events.ts";
 import { decodeMinimaxConfig, loadLocalMiniMaxConfig, MinimaxDriver } from "./minimax.ts";
 
+vi.mock("./provider-fetch.ts");
+
 describe("MinimaxDriver", () => {
   const saved = {
     home: process.env.HOME,

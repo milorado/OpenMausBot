@@ -168,14 +168,13 @@ describe("Store", () => {
   it("never empties rooms when the bot list cannot be read", () => {
     const store = new Store(selection);
     const [ada, cleo] = [store.createBot({}), store.createBot({})];
-    const room = store.createGroup("Launch team", [ada.id, cleo.id], false);
+    store.createGroup("Launch team", [ada.id, cleo.id], false);
     const groupsFile = join(DATA_DIR, "groups.json");
     const before = readFileSync(groupsFile, "utf8");
     writeFileSync(join(DATA_DIR, "bots.json"), "{ not json");
 
-    expect(new Store(selection).group(room.id)?.memberIds).toEqual([ada.id, cleo.id]);
-    expect(JSON.parse(readFileSync(groupsFile, "utf8")).find((g: { id: string }) => g.id === room.id).memberIds)
-      .toEqual(JSON.parse(before).find((g: { id: string }) => g.id === room.id).memberIds);
+    expect(() => new Store(selection)).toThrow("Cannot load bots.json");
+    expect(readFileSync(groupsFile, "utf8")).toBe(before);
   });
 
   it("renames populated teams without changing members, conversations, grants or computer identity", () => {
@@ -1698,13 +1697,28 @@ describe("Store", () => {
     expect(reloaded.activePath(bot.threadId).map((m) => m.text)).not.toContain("v1");
   });
 
-  it("tolerates a corrupt bots.json by starting empty", () => {
+  it.each(["bots.json", "groups.json"])("preserves an invalid %s through startup and resumes after repair", (name) => {
     const store = new Store(selection);
-    store.createBot();
-    writeFileSync(join(DATA_DIR, "bots.json"), "{not json");
+    const bot = store.createBot({ name: "Original" });
+    store.createGroup("Fixture", [bot.id], false);
+    const file = join(DATA_DIR, name);
+    const original = readFileSync(file, "utf8");
+    for (const damaged of [original.slice(0, -1), "{}", "[{}]"]) {
+      writeFileSync(file, damaged);
+      expect(() => new Store(selection).seedIfEmpty()).toThrow(`Cannot load ${name}`);
+      expect(readFileSync(file, "utf8")).toBe(damaged);
+    }
+    writeFileSync(file, original);
+    const repaired = new Store(selection);
+    repaired.seedIfEmpty();
+    expect(repaired.bots.map((record) => record.id)).toEqual([bot.id]);
+    expect(repaired.groups[0]?.name).toBe("Fixture");
+  });
 
-    const reloaded = new Store(selection);
-    expect(reloaded.bots).toEqual([]);
+  it("refuses a registry it cannot read as a file", () => {
+    mkdirSync(join(DATA_DIR, "bots.json"), { recursive: true });
+    expect(() => new Store(selection).seedIfEmpty()).toThrow("Cannot load bots.json");
+    expect(statSync(join(DATA_DIR, "bots.json")).isDirectory()).toBe(true);
   });
 
   it("busy is wiped even when bots.json says otherwise", () => {

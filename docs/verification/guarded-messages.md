@@ -64,9 +64,8 @@ fixture log in a `.log.guarded-coordination.json` receipt.
 
 `capabilities.guardedRequests: 1` advertises two additional loopback/admin
 routes. They do not grant a new paired-client permission or weaken Ask mode.
-On a hosted workspace, where session-less loopback is only a service, these
-and the guarded send are among the few routes it keeps
-([shared-workspace trust](shared-workspace-trust.md)).
+On a hosted workspace using service trust, the guarded send and the request
+routes require an admin session. See [shared-workspace trust](shared-workspace-trust.md).
 
 - `GET /api/bots/:botId/requests/:sendId?threadId=...` returns
   `messageId`, `activeLeafId`, `phase`, `activeTurnId`, `executionId`, and
@@ -131,10 +130,12 @@ It is active only with a fully validated HTTPS `OMB_ADMIN_URL`,
 entitlement. `OMB_DESKTOP_PARENT=1` disallows it. HTTP settings cannot toggle it.
 
 Only while that policy is active does authenticated health advertise
-`capabilities.sharedWorkspaceFullAccess: 1`. A trusted loopback caller may then
+`capabilities.sharedWorkspaceFullAccess: 1`. An owner-trust loopback caller may then
 create **a new task** with `POST /api/bots/:botId/tasks` and
 `approvalMode: "full"`, provided its provider supports Full. Remote sessions,
-including administrators, cannot use this grant route. This policy trusts
+including administrators, cannot use this grant route. The hosted default,
+service trust, requires a session for task creation and therefore offers no
+loopback Full-task grant. This policy trusts
 local processes in that dedicated workspace; it must not be enabled on a
 personal desktop or a workspace where local tools must not create Full tasks.
 

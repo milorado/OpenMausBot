@@ -132,7 +132,7 @@ export interface JobArgs {
 export type JobType = keyof JobArgs;
 export const JOB_TYPES: readonly JobType[] = ["start", "stop", "restart", "update", "status", "backup", "restore", "export-disk", "import-disk", "host-health", "self-update"];
 
-/** Admin → connector. `id` is the Admin's; a job sent again with the same id is answered again, never run twice. */
+/** Admin → connector. `id` is the Admin's. Across reconnects the same process suppresses running duplicates and replays its 200 latest completed job IDs. After a process restart, check the outcome before retrying a mutation. */
 export interface Job<T extends JobType = JobType> {
   id: string;
   type: T;

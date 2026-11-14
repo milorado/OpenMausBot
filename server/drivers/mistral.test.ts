@@ -3,6 +3,8 @@ import { ASK_USER_TOOL_DEFINITION } from "../../shared/ask-question.ts";
 import { recordEvents } from "../testing/events.ts";
 import { MistralDriver } from "./mistral.ts";
 
+vi.mock("./provider-fetch.ts");
+
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 const create = (config = {}) => MistralDriver.create({

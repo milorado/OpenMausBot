@@ -9,6 +9,8 @@ import { ProviderRegistry } from "./harness/registry.ts";
 import { recordEvents } from "./testing/events.ts";
 import { TRIAL_CREDIT_REFUSED } from "./trial-credit.ts";
 
+vi.mock("./drivers/provider-fetch.ts");
+
 const TOKEN = `omb_ai_${"t".repeat(43)}`;
 /** OMB_CLOUD_AI_URL exactly as the Admin sets it: an OpenAI base URL, its `/v1` included. */
 const RELAY = "https://cloud.example.test/api/cloud/services/ai/v1";

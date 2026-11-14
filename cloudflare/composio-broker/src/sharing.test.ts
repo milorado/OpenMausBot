@@ -1,10 +1,14 @@
+import { readFileSync } from "node:fs";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { runHourly, SWEEP_AFTER_MS } from "./app-events";
+import { DAY_MS } from "./common";
 import { brokerHarness, message, type Installation } from "./test-harness";
 
 let h: ReturnType<typeof brokerHarness>;
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 function harness(migrations?: number) {
   h = brokerHarness(migrations === undefined ? {} : { migrations });
@@ -116,6 +120,99 @@ describe("a desktop shares its connected apps with the person's own Cloud", () =
     expect((await h.deliver(message(created.triggerId, desktop.userId))).status).toBe(200);
     expect(h.queued(desktop.id)).toHaveLength(1);
     expect(h.queued(cloud.id)).toHaveLength(1);
+  });
+
+  it("keeps a shared trigger for an active peer, pauses it when both are idle and resumes it on repoll", async () => {
+    harness();
+    const desktop = await h.install(), cloud = await h.install();
+    const gmail = h.account(desktop);
+    expect((await post(cloud, "/v1/installation/adopt", { code: await share(desktop, cloud) })).status).toBe(200);
+    const { body: { triggerId } } = await h.createTrigger(desktop, gmail);
+    expect((await h.createTrigger(cloud, gmail)).body.triggerId).toBe(triggerId);
+    const now = Date.now();
+    await h.poll(cloud);
+    h.d1.db.prepare("UPDATE trigger_bindings SET created_at = ?").run(now - SWEEP_AFTER_MS - DAY_MS);
+    await runHourly(h.env as never, now);
+    const instance = h.composio.instances.get(triggerId)!;
+    expect(instance.disabled_at).toBeNull();
+    await runHourly(h.env as never, now + SWEEP_AFTER_MS + DAY_MS);
+    expect(instance.disabled_at).not.toBeNull();
+    await h.poll(desktop);
+    await Promise.all(h.background);
+    expect(instance.disabled_at).toBeNull();
+  });
+
+  it("repairs previously swept shared triggers across hourly batches and resumes them over two polls", async () => {
+    harness(5);
+    const desktop = await h.install(), cloud = await h.install();
+    const gmail = h.account(desktop);
+    expect((await post(cloud, "/v1/installation/adopt", { code: await share(desktop, cloud) })).status).toBe(200);
+    for (let i = 0; i < 41; i += 1) {
+      const config = { query: `subject:order-${i}` };
+      const first = await h.createTrigger(desktop, gmail, config);
+      expect((await h.createTrigger(cloud, gmail, config)).body.triggerId).toBe(first.body.triggerId);
+    }
+    h.d1.db.exec("UPDATE trigger_bindings SET swept_at = 1; UPDATE installations SET triggers_swept_at = 1");
+    h.d1.db.exec(readFileSync(new URL("../migrations/0006_shared_idle_triggers.sql", import.meta.url), "utf8"));
+    const now = Date.now() + SWEEP_AFTER_MS + DAY_MS;
+    const paused = () => [...h.composio.instances.values()].filter((instance) => instance.disabled_at !== null);
+    await runHourly(h.env as never, now);
+    expect(paused()).toHaveLength(40);
+    await runHourly(h.env as never, now + DAY_MS);
+    expect(paused()).toHaveLength(41);
+    expect(h.composio.callsTo("/trigger_instances/manage/")).toHaveLength(41);
+    await h.poll(cloud);
+    await Promise.all(h.background);
+    expect(paused()).toHaveLength(1);
+    await h.poll(cloud);
+    await Promise.all(h.background);
+    expect(paused()).toEqual([]);
+  });
+
+  it("retries failed disables behind untouched instances and failed resumes on the next poll", async () => {
+    harness();
+    const desktop = await h.install();
+    const gmail = h.account(desktop);
+    for (let i = 0; i < 41; i += 1) await h.createTrigger(desktop, gmail, { query: `subject:order-${i}` });
+    for (let i = 0; i < 40; i += 1) h.composio.fail(503, (call) => call.body?.status === "disable");
+    const now = Date.now() + SWEEP_AFTER_MS + DAY_MS;
+    await runHourly(h.env as never, now);
+    const attempts = () => h.composio.callsTo("/trigger_instances/manage/").map((call) => call.path);
+    const first = new Set(attempts());
+    expect(first.size).toBe(40);
+    await runHourly(h.env as never, now + DAY_MS);
+    expect(first.has(attempts()[40])).toBe(false);
+    await runHourly(h.env as never, now + 2 * DAY_MS);
+    const disabled = () => [...h.composio.instances.values()].filter((instance) => instance.disabled_at !== null);
+    expect(disabled()).toHaveLength(41);
+    h.composio.fail(503, (call) => call.body?.status === "enable");
+    await h.poll(desktop);
+    await Promise.all(h.background);
+    expect(disabled()).toHaveLength(2);
+    await h.poll(desktop);
+    await Promise.all(h.background);
+    expect(disabled()).toEqual([]);
+  });
+
+  it("restores a shared trigger when a peer polls during Composio's disable request", async () => {
+    harness();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const desktop = await h.install(), cloud = await h.install();
+    const gmail = h.account(desktop);
+    expect((await post(cloud, "/v1/installation/adopt", { code: await share(desktop, cloud) })).status).toBe(200);
+    const { body: { triggerId } } = await h.createTrigger(desktop, gmail);
+    await h.createTrigger(cloud, gmail);
+    vi.setSystemTime(Date.now() + SWEEP_AFTER_MS + DAY_MS);
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === "PATCH" && JSON.parse(String(init.body)).status === "disable") {
+        await h.poll(cloud);
+        await Promise.all(h.background);
+      }
+      return h.composio.fetchImpl(input, init);
+    });
+    await runHourly(h.env as never, Date.now());
+    expect(h.composio.callsTo("/trigger_instances/manage/").map((call) => call.body?.status)).toEqual(["enable", "disable", "enable"]);
+    expect(h.composio.instances.get(triggerId)?.disabled_at).toBeNull();
   });
 
   it("an event naming another user is still refused for a sharing installation", async () => {

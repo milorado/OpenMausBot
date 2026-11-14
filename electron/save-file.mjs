@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -48,6 +49,47 @@ function isSameFile(left, right) {
   return left.dev === right.dev && left.ino === right.ino;
 }
 
+// Node 24 omits Darwin's O_NOFOLLOW_ANY, which rejects symlinks in every component.
+const O_NOFOLLOW_ANY = 0x20000000;
+
+// Node does not expose GetFinalPathNameByHandleW. Windows gives the child a duplicate of
+// the already-open file as standard input, so this query never reopens a renderer-supplied path.
+const WINDOWS_HANDLE_PATH = `
+$ErrorActionPreference = 'Stop'
+Add-Type -Namespace OMB -Name SaveHandle -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern System.IntPtr GetStdHandle(int kind);
+[System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode, ExactSpelling=true)]
+public static extern uint GetFinalPathNameByHandleW(System.IntPtr file, System.Text.StringBuilder path, uint size, uint flags);
+'@
+$path = New-Object System.Text.StringBuilder 32768
+$n = [OMB.SaveHandle]::GetFinalPathNameByHandleW([OMB.SaveHandle]::GetStdHandle(-10), $path, $path.Capacity, 0)
+if ($n -eq 0 -or $n -ge $path.Capacity) { exit 1 }
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+[Console]::Write($path.ToString())
+`;
+
+async function windowsHandlePath(fd) {
+  const exe = path.win32.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const child = spawn(exe, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_HANDLE_PATH], {
+    windowsHide: true, stdio: [fd, "pipe", "ignore"], timeout: 10_000,
+  });
+  let output = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    if (output.length <= 32768) output += chunk;
+    if (output.length > 32768) child.kill();
+  });
+  return new Promise((resolve, reject) => {
+    const refused = () => reject(new Error("The opened file's location could not be verified"));
+    child.once("error", refused);
+    child.once("close", (code) => {
+      if (code !== 0 || !output || output.length > 32768) return refused();
+      resolve(output);
+    });
+  });
+}
+
 // Paths come from model-rendered markdown, so they are untrusted.
 async function resolveSource(rawPath, { home, fsp, platform }) {
   const target = normalizeSourcePath(rawPath);
@@ -74,12 +116,19 @@ export async function resolveSavablePath(rawPath, { home, fsp = fs.promises, pla
 
 async function openSavableFile(rawPath, { home, fsp, platform }) {
   const source = await resolveSource(rawPath, { home, fsp, platform });
-  const noFollow = platform === "win32" ? 0 : fs.constants.O_NOFOLLOW ?? 0;
-  const handle = await fsp.open(source.filePath, fs.constants.O_RDONLY | noFollow);
+  const flags = platform === "win32" ? fs.constants.O_RDONLY
+    : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | (platform === "darwin" ? O_NOFOLLOW_ANY : fs.constants.O_NOFOLLOW);
+  const handle = await fsp.open(source.filePath, flags);
   try {
     const openedStats = await handle.stat({ bigint: true });
     assertRegularFile(openedStats);
-    if (platform === "win32" && !isSameFile(source.stats, openedStats)) {
+    if (!isSameFile(source.stats, openedStats)) {
+      throw new Error("That file changed while it was being opened");
+    }
+    if (platform === "linux" && await fsp.readlink(`/proc/self/fd/${handle.fd}`) !== source.filePath) {
+      throw new Error("That file changed while it was being opened");
+    }
+    if (platform === "win32" && await windowsHandlePath(handle.fd) !== path.win32.toNamespacedPath(source.filePath)) {
       throw new Error("That file changed while it was being opened");
     }
     return { handle, filePath: source.filePath };

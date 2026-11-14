@@ -1,5 +1,6 @@
 // Transcript-replay driver for OpenRouter, Groq, Together, llama.cpp, and
 // other endpoints that speak the OpenAI chat-completions contract.
+import { providerFetch } from "./provider-fetch.ts";
 import type { ModelCatalog, ProviderDriver } from "../contracts.ts";
 import { isLoopback } from "../provider-key-check.ts";
 import { lmStudioV1Catalog } from "./local-inject.ts";
@@ -188,7 +189,7 @@ export const OpenAICompatDriver: ProviderDriver<OpenAICompatConfig> = {
         const nativeUrl = config.catalog === "lmstudio" ? loopbackLmStudioV1Url(config.url) : null;
         if (nativeUrl) {
           try {
-            const native = await fetch(nativeUrl, {
+            const native = await providerFetch(nativeUrl, {
               headers: { authorization: `Bearer ${apiKey}` },
               signal: AbortSignal.timeout(8_000),
             });
@@ -215,7 +216,7 @@ export const OpenAICompatDriver: ProviderDriver<OpenAICompatConfig> = {
             // Native LM Studio catalog unavailable; try OpenAI-compatible /models below.
           }
         }
-        const response = await fetch(`${config.url}/models`, {
+        const response = await providerFetch(`${config.url}/models`, {
           headers: { authorization: `Bearer ${apiKey}` },
           signal: AbortSignal.timeout(8_000),
         });
@@ -252,7 +253,7 @@ export const OpenAICompatDriver: ProviderDriver<OpenAICompatConfig> = {
             url.pathname = url.pathname.replace(/\/v1\/?$/, "").replace(/\/$/, "") + "/props";
             url.searchParams.set("model", String(selected.id));
             url.searchParams.set("autoload", "false");
-            const props = await fetch(url, { redirect: "error", headers: { authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(3_000) });
+            const props = await providerFetch(url, { redirect: "error", headers: { authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(3_000) });
             if (!props.ok) continue;
             const json = await props.json() as { default_generation_settings?: { n_ctx?: unknown } };
             const window = positiveTokens(json.default_generation_settings?.n_ctx);

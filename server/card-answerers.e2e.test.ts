@@ -279,7 +279,7 @@ posixOnly("who may answer a card on a shared workspace", () => {
     expect((await api("GET", "/api/bots?messages=0", undefined, BOSS)).body.bots.find((candidate: { id: string }) => candidate.id === bot.id).title).toBe("");
   }, 90_000);
 
-  it("lets a session-less local service decline but never approve under service trust", async () => {
+  it("requires a session to answer cards under service trust", async () => {
     const bot = await makeBot("Serviced");
     await waitForExit(child, { signal: "SIGTERM" });
     await start({ OMB_LOOPBACK_TRUST: "service" });
@@ -288,31 +288,17 @@ posixOnly("who may answer a card on a shared workspace", () => {
 
     const approve = await api("POST", `/api/threads/${bot.threadId}/respond`, { requestId, behavior: "allow" });
     expect(approve.status).toBe(403);
-    expect(approve.body.error).toMatch(/can only decline/);
+    expect(approve.body.error).toMatch(/shared server/);
     expect((await api("POST", `/api/bots/${bot.id}/respond`, { requestId, behavior: "allow" })).status).toBe(403);
     expect((await api("POST", `/api/bots/${bot.id}/always-allow`, { allowKey: "shell:echo" })).status).toBe(403);
     expect((await api("POST", `/api/threads/${bot.threadId}/undo`, { requestId })).status).toBe(403);
     expect((await openCard(bot.threadId))?.card.requestId).toBe(requestId);
 
     const decline = await api("POST", `/api/threads/${bot.threadId}/respond`, { requestId, behavior: "deny" });
-    expect(decline.status, JSON.stringify(decline.body)).toBe(200);
-    expect((await decision(requestId, "user-denied"))?.actor).toEqual({ kind: "worker" });
-    expect((await settledCard(bot.threadId, requestId))?.card.answeredBy).toEqual({ kind: "worker" });
-
-    // A Slack-shaped request: the worker opens the thread and sends through
-    // the guarded route, so no person can be named. Any member may approve it
-    // in OpenMausBot, as before; nothing waits on an admin.
-    const task = await api("POST", `/api/bots/${bot.id}/tasks`, { title: "Slack · C1 · 1.0" });
-    expect(task.status, JSON.stringify(task.body)).toBe(201);
-    const threadId = task.body.task.threadId as string;
-    const page = await api("GET", `/api/threads/${threadId}/messages?limit=0`);
-    const guarded = await api("POST", `/api/bots/${bot.id}/messages/guarded`, {
-      threadId, text: "run it", sendId: "slackjob_card_answerers_1", expectedActiveLeafId: page.body.activeLeafId ?? null,
-    });
-    expect(guarded.status, JSON.stringify(guarded.body)).toBe(202);
-    const slackCard = await openCard(threadId);
-    expect(slackCard).not.toBeNull();
-    const approved = await api("POST", `/api/threads/${threadId}/respond`, { requestId: slackCard.card.requestId, behavior: "allow" }, ADA);
-    expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+    expect(decline.status).toBe(403);
+    expect((await openCard(bot.threadId))?.card.requestId).toBe(requestId);
+    const byMember = await api("POST", `/api/threads/${bot.threadId}/respond`, { requestId, behavior: "deny" }, ADA);
+    expect(byMember.status, JSON.stringify(byMember.body)).toBe(200);
+    expect((await decision(requestId, "user-denied"))?.actor).toMatchObject({ kind: "session", email: ADA });
   }, 90_000);
 });

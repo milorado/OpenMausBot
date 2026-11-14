@@ -189,6 +189,42 @@ describe("save-file source handles", () => {
     });
   });
 
+  for (const swapBefore of ["stat", "open"]) {
+    it(`rejects a parent redirected outside the bot home before ${swapBefore}`, { skip: !canSymlink }, async () => {
+      const sourceDir = fs.mkdtempSync(path.join(botHome, "save-race-"));
+      const outside = fs.mkdtempSync(path.join(home, "outside-"));
+      const file = path.join(sourceDir, "report.txt");
+      fs.writeFileSync(file, "inside");
+      fs.writeFileSync(path.join(outside, "report.txt"), "outside");
+      const fsp = {
+        ...fs.promises,
+        [swapBefore]: async (...args) => {
+          fs.renameSync(sourceDir, `${sourceDir}-original`);
+          fs.symlinkSync(outside, sourceDir, "dir");
+          return fs.promises[swapBefore](...args);
+        },
+      };
+      let offered = false;
+      await assert.rejects(withSavableFile(file, { home, fsp }, async () => { offered = true; }));
+      assert.equal(offered, false);
+    });
+  }
+
+  it("rejects an opened Linux descriptor resolving outside the validated path", async () => {
+    const source = path.join(botHome, "workspaces", "bot", "report.docx");
+    const fsp = {
+      ...fs.promises,
+      readlink: async (file) => {
+        assert.match(file, /^\/proc\/self\/fd\/\d+$/);
+        return path.join(home, "outside.docx");
+      },
+    };
+    await assert.rejects(
+      withSavableFile(source, { home, fsp, platform: "linux" }, async () => assert.fail("unexpected save")),
+      { message: "That file changed while it was being opened" },
+    );
+  });
+
   it("rejects a validation-to-open identity swap on Windows", async () => {
     const source = path.join(botHome, "workspaces", "bot", "report.docx");
     // Distinct BigInts that collapse to the same Number.

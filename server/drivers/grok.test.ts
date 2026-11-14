@@ -2,12 +2,14 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ensureDirs, NATIVE_DIR } from "../config.ts";
 import type { ProviderInstance } from "../contracts.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { GrokDriver } from "./grok.ts";
+
+vi.mock("./provider-fetch.ts");
 
 const SSE_BODY = (text: string) =>
   [

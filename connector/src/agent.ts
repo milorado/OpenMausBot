@@ -71,7 +71,8 @@ export class Agent {
   private stopped = true;
   /** Replies the Admin has not acknowledged yet, sent again on each connection. */
   private readonly unacked = new Map<string, { text: string; at: number }>();
-  private readonly replies = new Map<string, JobReply | "running">();
+  private readonly replies = new Map<string, JobReply>();
+  private readonly running = new Set<string>();
   /** Called once each time the Admin has accepted a connection. */
   onConnected: (() => void) | null = null;
 
@@ -226,21 +227,22 @@ export class Agent {
       return;
     }
     const { job } = checked;
+    if (this.running.has(job.id)) return;
     const known = this.replies.get(job.id);
-    if (known === "running") return;
     if (known) {
       this.reply(known);
       return;
     }
-    this.replies.set(job.id, "running");
+    this.running.add(job.id);
     this.options.log(`job ${job.id}: ${job.type}`);
     this.options.handle(job).then((reply) => {
-      if (reply === null) {
-        this.replies.delete(job.id);
-        return;
-      }
+      this.running.delete(job.id);
+      if (reply === null) return;
       this.options.log(`job ${job.id}: ${reply.ok ? "done" : `failed (${reply.error.code})`}`);
       this.reply(reply);
-    }, (error) => this.reply({ id: job.id, ok: false, error: { code: "docker", message: errorText(error) } }));
+    }, (error) => {
+      this.running.delete(job.id);
+      this.reply({ id: job.id, ok: false, error: { code: "docker", message: errorText(error) } });
+    });
   }
 }

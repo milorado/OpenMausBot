@@ -745,11 +745,11 @@ const HOSTED_WORKSPACE = hostedWorkspaceConfigured();
 let workspaceAccess: WorkspaceAccess | null = null;
 const DESKTOP_MANAGED = process.env.OMB_DESKTOP_PARENT === "1";
 const SHARED_WORKSPACE_FULL_ACCESS = sharedWorkspaceFullAccessConfigured();
-const sharedWorkspaceFullAccessEnabled = () => SHARED_WORKSPACE_FULL_ACCESS && Boolean(workspaceAccess) && entitled("admin");
 const HOSTED_FULL_ACCESS_REFUSAL = "On a shared company workspace Full access comes only from the operator's dedicated policy";
 if (HOSTED_WORKSPACE) setDefaultApprovalMode("ask");
 // On a shared workspace loopback is a service, not the owner: every bot's shell is a loopback caller too.
 const LOOPBACK = resolveLoopbackTrust({ desktopManaged: DESKTOP_MANAGED, hostedWorkspace: HOSTED_WORKSPACE, cloudHome: Boolean(CLOUD_HOME), fromSource: import.meta.url.endsWith(".ts") });
+const sharedWorkspaceFullAccessEnabled = () => SHARED_WORKSPACE_FULL_ACCESS && LOOPBACK.trust === "owner" && Boolean(workspaceAccess) && entitled("admin");
 // The CLI's per-launch secret comes on stdin, never an env var: every engine this server starts inherits its environment.
 let cliOwnerToken: string | undefined;
 if (process.env.OMB_CLI_OWNER_STDIN === "1" && LOOPBACK.trust === "service" && process.stdin) {
@@ -15595,7 +15595,7 @@ console.log(describeEdition(await loadEnterpriseLayer()));
 const startupLicenseWarning = licenseWarning(editionStatus());
 if (startupLicenseWarning) console.warn(startupLicenseWarning);
 console.log(LOOPBACK.trust === "service"
-  ? `local requests: service trust (${LOOPBACK.reason}); without a session, loopback may use only health, the Slack worker's guarded routes and bot capability routes`
+  ? `local requests: service trust (${LOOPBACK.reason}); without a session, loopback may use only health, identity and bot capability routes`
   : `local requests: owner trust (${LOOPBACK.reason})`);
 if (LOOPBACK.warning) console.warn(`local requests: ${LOOPBACK.warning}`);
 // Every room's floor once, before any request: a room already mixed at start keeps its narrowest audience.

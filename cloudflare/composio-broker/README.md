@@ -165,3 +165,6 @@ changes nothing.
    (step 1) before the code that uses it reaches `main`, because CI deploys
    every push to `main`. Without it, the hourly sweep of idle installations
    fails after it has expired old events.
+8. Apply `0006_shared_idle_triggers.sql` to recheck shared triggers already
+   marked swept. The hourly sweep pauses a provider trigger when its last
+   enabled listener becomes idle. A returning listener resumes it.
